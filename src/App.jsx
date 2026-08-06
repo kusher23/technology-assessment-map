@@ -566,7 +566,7 @@ Return ONLY this JSON:
       ...structure.columns.map((c) => [c.name, c.weight, c.desc, c.inverted ? "yes" : ""]),
       [],
       ["Gates — pass/fail, filter rows before scoring, never averaged"],
-      ...structure.gates.map((g) => [g.name, "", g.desc]),
+      ...(structure.gates?.map((g) => [g.name, "", g.desc]) ?? []),
       [],
       ["Before this goes to anyone"],
       ["", "Scores are a starting point. They encode judgment that should be yours."],
