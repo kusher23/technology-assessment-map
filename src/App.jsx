@@ -1,5 +1,11 @@
 import React, { useState, useRef, useEffect } from "react";
-import * as XLSX from "xlsx";
+
+/* ExcelJS is roughly two thirds of the bundle and nothing needs it until someone
+   clicks Download, so it loads on demand. Memoised, so a second export reuses the
+   chunk already fetched. */
+let excelJsPromise;
+const loadExcelJS = () =>
+  (excelJsPromise ??= import("exceljs").then((m) => m.default ?? m));
 
 /* ---------------------------------------------------------------------------
    Opportunity Map Builder
@@ -23,6 +29,36 @@ const CONF = {
   high: { label: "verified-shape", color: C.pine, bar: 3 },
   medium: { label: "check", color: C.amber, bar: 2 },
   low: { label: "verify first", color: C.rust, bar: 1 },
+};
+
+/* Excel wants ARGB with no hash, so the palette is restated here rather than
+   converted at every call site. */
+const argb = (hex) => "FF" + hex.replace("#", "").toUpperCase();
+
+const X = {
+  pine: argb(C.pine),
+  paper: argb(C.paper),
+  rule: argb(C.rule),
+  ink: argb(C.ink),
+  amber: argb(C.amber),
+  rust: argb(C.rust),
+  white: "FFFFFFFF",
+};
+
+// Score fills step from lightest pine at 1 to full pine at 5, with the text
+// flipping to white once the ground gets too dark to read ink against.
+const SCORE_X = {
+  1: { fill: argb("#E4EBE8"), text: X.ink },
+  2: { fill: argb("#C4D3CD"), text: X.ink },
+  3: { fill: argb("#9DB8AF"), text: X.ink },
+  4: { fill: argb(C.pineLight), text: X.white },
+  5: { fill: argb(C.pine), text: X.white },
+};
+
+const CONF_X = {
+  high: { text: X.pine, fill: argb("#E9EFEC") },
+  medium: { text: X.amber, fill: argb("#FAF2E6") },
+  low: { text: X.rust, fill: argb("#F7EAE6") },
 };
 
 /* A response cut off by the token ceiling is still valid JSON up to the point it
@@ -155,6 +191,28 @@ function Eyebrow({ children, n }) {
   );
 }
 
+/* Small caps run-in heading for the blocks inside a field's helper text. */
+function HelpLabel({ children, tone }) {
+  return (
+    <div
+      style={{
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontSize: 10,
+        letterSpacing: "0.1em",
+        textTransform: "uppercase",
+        color: tone || C.muted,
+        marginBottom: 4,
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function Arrow() {
+  return <span style={{ color: C.rule, margin: "0 4px" }}>→</span>;
+}
+
 function Btn({ children, onClick, disabled, kind = "solid" }) {
   const solid = kind === "solid";
   return (
@@ -224,6 +282,8 @@ export default function OpportunityMapBuilder() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState(null);
   const mapRef = useRef(null);
 
   useEffect(() => {
@@ -532,54 +592,195 @@ Return ONLY this JSON:
     setStructure({ ...structure, columns: cols });
   }
 
-  function exportXlsx() {
-    const head = [
-      "Rank",
-      "Option",
-      "Description",
-      ...structure.columns.map((c) => `${c.name}${c.inverted ? " (inv)" : ""}`),
-      ...structure.columns.map((c) => `${c.name} score`),
-      "Composite",
-      "Confidence",
+  // The export chunk is fetched on click, so a failure here can be a network problem
+  // rather than a bug in the sheet building. Reported next to the button, since the
+  // banner at the top of the page is a long way from where the click happened.
+  async function handleExport() {
+    setExporting(true);
+    setExportError(null);
+    try {
+      await exportXlsx();
+    } catch (e) {
+      console.error("Export failed:", e);
+      setExportError(`Export failed — ${e.message}`);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function exportXlsx() {
+    const ExcelJS = await loadExcelJS();
+    const wb = new ExcelJS.Workbook();
+    wb.creator = "Opportunity Map Builder";
+
+    const cols = structure.columns;
+    const hair = { style: "thin", color: { argb: X.rule } };
+    const border = { top: hair, left: hair, bottom: hair, right: hair };
+    const paperFill = { type: "pattern", pattern: "solid", fgColor: { argb: X.paper } };
+
+    const headerCell = (cell) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: X.pine } };
+      cell.font = { bold: true, size: 11, color: { argb: X.white } };
+      cell.alignment = { vertical: "middle", wrapText: true };
+      cell.border = border;
+    };
+
+    /* ------------------------------- Map sheet ------------------------------ */
+    // Column order mirrors the on-screen table: identity, then the headline
+    // numbers, then each criterion's score sitting next to its own note.
+    const ws = wb.addWorksheet("Map", { views: [{ state: "frozen", ySplit: 1 }] });
+    ws.columns = [
+      { header: "Rank", width: 7 },
+      { header: "Option", width: 30 },
+      { header: "Description", width: 44 },
+      { header: "Composite", width: 12 },
+      { header: "Confidence", width: 15 },
+      ...cols.flatMap((c) => [
+        { header: `${c.name}${c.inverted ? " (inv)" : ""}`, width: 9 },
+        { header: `${c.name} — note`, width: 34 },
+      ]),
     ];
-    const body = sorted.map((r, i) => [
-      i + 1,
-      r.name,
-      r.desc || "",
-      ...structure.columns.map((c) => r.notes?.[c.name] || ""),
-      ...structure.columns.map((c) => r.scores?.[c.name] ?? ""),
-      Number(composite(r).toFixed(2)),
-      CONF[r.conf]?.label || r.conf,
-    ]);
-    const ws = XLSX.utils.aoa_to_sheet([head, ...body]);
-    ws["!cols"] = head.map((h, i) => ({ wch: i === 2 ? 46 : i === 1 ? 30 : i < 3 + structure.columns.length && i >= 3 ? 34 : 13 }));
 
-    const meta = XLSX.utils.aoa_to_sheet([
-      ["Opportunity Map"],
-      [],
-      ["Topic", topic],
-      ["Objective", objective],
-      ["Axis of variation", structure.axis],
-      ["Why this axis", structure.why],
-      [],
-      ["Criterion", "Weight %", "What it measures", "Inverted"],
-      ...structure.columns.map((c) => [c.name, c.weight, c.desc, c.inverted ? "yes" : ""]),
-      [],
-      ["Gates — pass/fail, filter rows before scoring, never averaged"],
-      ...(structure.gates?.map((g) => [g.name, "", g.desc]) ?? []),
-      [],
-      ["Before this goes to anyone"],
-      ["", "Scores are a starting point. They encode judgment that should be yours."],
-      ["", "Rows marked 'verify first' contain specifics that were not researched. Check them."],
-      ["", "Set weights before reading scores. Tuning them afterward makes the map decoration."],
-      ["", "Read the profile, not just the composite. A low-Prize, high-Fit row is a beachhead."],
-    ]);
-    meta["!cols"] = [{ wch: 22 }, { wch: 12 }, { wch: 70 }, { wch: 10 }];
+    sorted.forEach((r, i) => {
+      ws.addRow([
+        i + 1,
+        r.name,
+        r.desc || "",
+        Number(composite(r).toFixed(2)),
+        CONF[r.conf]?.label || r.conf,
+        ...cols.flatMap((c) => [r.scores?.[c.name] ?? "", r.notes?.[c.name] || ""]),
+      ]);
+    });
 
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Map");
-    XLSX.utils.book_append_sheet(wb, meta, "Method");
-    XLSX.writeFile(wb, `opportunity-map-${Date.now()}.xlsx`);
+    const headRow = ws.getRow(1);
+    headRow.height = 30;
+    headRow.eachCell(headerCell);
+
+    sorted.forEach((r, i) => {
+      const row = ws.getRow(i + 2);
+      row.height = 30;
+
+      row.eachCell({ includeEmpty: true }, (cell) => {
+        cell.fill = paperFill;
+        cell.border = border;
+        cell.font = { size: 10.5, color: { argb: X.ink } };
+        cell.alignment = { vertical: "top", wrapText: false };
+      });
+
+      row.getCell(1).alignment = { vertical: "top", horizontal: "center" };
+      row.getCell(2).font = { size: 10.5, bold: true, color: { argb: X.ink } };
+      row.getCell(3).alignment = { vertical: "top", wrapText: true };
+
+      // Composite carries the ranking, so it gets the weight on the row.
+      const comp = row.getCell(4);
+      comp.font = { size: 12, bold: true, color: { argb: X.ink } };
+      comp.alignment = { vertical: "top", horizontal: "center" };
+      comp.numFmt = "0.00";
+
+      const conf = row.getCell(5);
+      conf.font = { size: 10.5, bold: true, color: { argb: CONF_X[r.conf]?.text || X.ink } };
+      conf.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: CONF_X[r.conf]?.fill || X.paper },
+      };
+      conf.alignment = { vertical: "top", horizontal: "center" };
+
+      cols.forEach((c, k) => {
+        const scoreCell = row.getCell(6 + k * 2);
+        const noteCell = row.getCell(7 + k * 2);
+        const v = r.scores?.[c.name];
+        const band = SCORE_X[v];
+        if (band) {
+          scoreCell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: band.fill } };
+          scoreCell.font = { size: 11, bold: true, color: { argb: band.text } };
+        }
+        scoreCell.alignment = { vertical: "top", horizontal: "center" };
+        noteCell.alignment = { vertical: "top", wrapText: true };
+      });
+    });
+
+    ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: ws.columnCount } };
+
+    /* ----------------------------- Method sheet ----------------------------- */
+    const meta = wb.addWorksheet("Method");
+    meta.columns = [{ width: 24 }, { width: 12 }, { width: 68 }, { width: 10 }];
+
+    const sectionRow = (label) => {
+      const row = meta.addRow([label]);
+      meta.mergeCells(row.number, 1, row.number, 4);
+      const cell = row.getCell(1);
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: X.pine } };
+      cell.font = { bold: true, size: 11, color: { argb: X.white } };
+      cell.alignment = { vertical: "middle" };
+      row.height = 24;
+      return row;
+    };
+
+    const bodyRow = (values, { wrapLast = true } = {}) => {
+      const row = meta.addRow(values);
+      row.eachCell({ includeEmpty: true }, (cell, n) => {
+        cell.fill = paperFill;
+        cell.border = border;
+        cell.font = { size: 10.5, color: { argb: X.ink } };
+        cell.alignment = { vertical: "top", wrapText: wrapLast && n >= 3 };
+      });
+      row.getCell(1).font = { size: 10.5, bold: true, color: { argb: X.ink } };
+      return row;
+    };
+
+    const title = meta.addRow(["Opportunity Map"]);
+    title.getCell(1).font = { bold: true, size: 16, color: { argb: X.pine } };
+    title.height = 26;
+    meta.addRow([]);
+
+    sectionRow("Framing");
+    bodyRow(["Topic", "", topic]);
+    bodyRow(["Objective", "", objective]);
+    bodyRow(["Axis of variation", "", structure.axis]);
+    bodyRow(["Why this axis", "", structure.why]);
+    meta.addRow([]);
+
+    sectionRow("Criteria and weights");
+    const critHead = meta.addRow(["Criterion", "Weight %", "What it measures", "Inverted"]);
+    critHead.eachCell(headerCell);
+    cols.forEach((c) => {
+      const row = bodyRow([c.name, c.weight, c.desc, c.inverted ? "yes" : ""]);
+      row.getCell(2).alignment = { vertical: "top", horizontal: "center" };
+      if (c.inverted) {
+        row.getCell(4).font = { size: 10.5, bold: true, color: { argb: X.amber } };
+      }
+    });
+    meta.addRow([]);
+
+    sectionRow("Gates — pass/fail, filter rows before scoring, never averaged");
+    (structure.gates ?? []).forEach((g) => {
+      const row = bodyRow([g.name, "", g.desc]);
+      row.getCell(1).font = { size: 10.5, bold: true, color: { argb: X.rust } };
+    });
+    meta.addRow([]);
+
+    sectionRow("Before this goes to anyone");
+    [
+      "Scores are a starting point. They encode judgment that should be yours.",
+      "Rows marked 'verify first' contain specifics that were not researched. Check them.",
+      "Set weights before reading scores. Tuning them afterward makes the map decoration.",
+      "Read the profile, not just the composite. A low-Prize, high-Fit row is a beachhead.",
+    ].forEach((line) => bodyRow(["", "", line]));
+
+    /* -------------------------------- download ------------------------------ */
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `opportunity-map-${Date.now()}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   }
 
   /* -------------------------------- render ------------------------------- */
@@ -633,14 +834,84 @@ Return ONLY this JSON:
         <section style={{ paddingTop: 34 }}>
           <Eyebrow n={1}>Frame</Eyebrow>
           <div style={{ display: "grid", gap: 22, maxWidth: 720 }}>
-            <label>
-              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 3 }}>
-                What are you trying to compare
+            {/* The guidance here is long enough that wrapping it in the <label> would
+                drag all of it into the field's accessible name, so this one field uses
+                htmlFor + aria-describedby instead. */}
+            <div>
+              <label
+                htmlFor="topic-input"
+                style={{ display: "block", fontSize: 14, fontWeight: 600, marginBottom: 3 }}
+              >
+                What opportunity space are you mapping?
+              </label>
+
+              <div
+                id="topic-help"
+                style={{ fontSize: 12.5, color: C.muted, marginBottom: 10, lineHeight: 1.55 }}
+              >
+                <p style={{ margin: "0 0 9px" }}>
+                  Describe an area where multiple approaches, strategies, or methods could
+                  exist side by side. Think category of options, not a single plan or a
+                  vague problem.
+                </p>
+
+                <div style={{ marginBottom: 9 }}>
+                  <HelpLabel>Phrase it like</HelpLabel>
+                  <div
+                    style={{
+                      fontFamily: "'IBM Plex Mono', monospace",
+                      fontSize: 11.5,
+                      color: C.pine,
+                      lineHeight: 1.7,
+                    }}
+                  >
+                    Ways to… · Approaches for… · Strategies to… · Methods for… ·
+                    Opportunities in…
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: 9 }}>
+                  <HelpLabel>Good examples</HelpLabel>
+                  <ul style={{ margin: 0, paddingLeft: 16, lineHeight: 1.6 }}>
+                    <li>Ways to store energy on an electrical grid</li>
+                    <li>Approaches for a coffee chain expanding into a new city</li>
+                    <li>Strategies to deploy electrochemical carbon capture</li>
+                    <li>Methods for reducing hospital readmissions</li>
+                  </ul>
+                </div>
+
+                <div style={{ marginBottom: 9 }}>
+                  <HelpLabel tone={C.rust}>Avoid</HelpLabel>
+                  <ul style={{ margin: 0, paddingLeft: 16, lineHeight: 1.6 }}>
+                    <li>
+                      a specific solution <Arrow /> “Build a battery farm”
+                    </li>
+                    <li>
+                      a vague complaint <Arrow /> “Energy is too expensive”
+                    </li>
+                    <li>
+                      a binary choice <Arrow /> “Batteries vs. pumped hydro?”
+                    </li>
+                  </ul>
+                </div>
+
+                <p
+                  style={{
+                    margin: 0,
+                    paddingTop: 8,
+                    borderTop: `1px solid ${C.ruleSoft}`,
+                    fontStyle: "italic",
+                  }}
+                >
+                  Once you give a topic, the tool builds a structured comparison of the
+                  distinct approaches in that space, mapped against criteria derived from
+                  the objective.
+                </p>
               </div>
-              <div style={{ fontSize: 13, color: C.muted, marginBottom: 9 }}>
-                Broad is fine. The next step works out how to break it down.
-              </div>
+
               <textarea
+                id="topic-input"
+                aria-describedby="topic-help"
                 value={topic}
                 onChange={(e) => setTopic(e.target.value)}
                 placeholder="Ways to store energy on an electrical grid"
@@ -656,7 +927,7 @@ Return ONLY this JSON:
                   color: C.ink,
                 }}
               />
-            </label>
+            </div>
 
             <label>
               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 3 }}>
@@ -1452,11 +1723,16 @@ Return ONLY this JSON:
                 </table>
               </div>
 
-              <div style={{ marginTop: 22, display: "flex", gap: 12, flexWrap: "wrap" }}>
-                <Btn onClick={exportXlsx}>Download as Excel</Btn>
+              <div style={{ marginTop: 22, display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+                <Btn onClick={handleExport} disabled={exporting}>
+                  {exporting ? "Preparing…" : "Download as Excel"}
+                </Btn>
                 <Btn kind="ghost" onClick={() => { setPhase("structure"); setRows([]); }}>
                   Change weights and rebuild
                 </Btn>
+                {exportError && (
+                  <span style={{ fontSize: 13, color: C.rust }}>{exportError}</span>
+                )}
               </div>
 
               <div
