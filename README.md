@@ -1,7 +1,7 @@
-# Opportunity Map Builder
+# Technology Assessment Map
 
-Tell it what you're comparing and what winning looks like, and it builds a scored
-comparison table: it proposes ways to slice the space, derives evaluation criteria from
+Name a technology and what winning looks like, and it builds a scored comparison of
+that technology's configurations: it proposes ways to slice the space, derives evaluation criteria from
 your objective, generates and scores the options, and exports the result to Excel. Every
 generated cell carries a confidence mark, because the scores are a starting position for
 your judgment rather than researched findings.
