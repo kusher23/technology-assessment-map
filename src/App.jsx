@@ -8,7 +8,7 @@ const loadExcelJS = () =>
   (excelJsPromise ??= import("exceljs").then((m) => m.default ?? m));
 
 /* ---------------------------------------------------------------------------
-   Opportunity Map Builder
+   Technology Assessment Map
    Topic in -> proposed structure -> your weights -> scored map -> Excel out.
    Every generated cell carries a confidence mark. Nothing is asserted silently.
 --------------------------------------------------------------------------- */
@@ -306,10 +306,10 @@ export default function OpportunityMapBuilder() {
         "Deliver four hours of storage below $100 per kWh installed by 2032",
     },
     {
-      label: "Coffee expansion",
-      topic: "Ways a coffee chain could expand into a new city",
+      label: "Green hydrogen",
+      topic: "Pathways for producing green hydrogen",
       objective:
-        "Open a location profitable within 18 months on under $400k of buildout",
+        "Produce hydrogen below $2 per kg at commercial scale by 2030",
     },
   ];
 
@@ -331,7 +331,7 @@ export default function OpportunityMapBuilder() {
     setStatus("Reading what you wrote");
     try {
       const r = await askClaude(
-        `Someone is about to build an opportunity map. Critique their framing before they start.
+        `Someone is about to build a technology assessment map. Critique their framing before they start.
 
 WHAT THEY WANT TO COMPARE: ${topic}
 WHAT WINNING LOOKS LIKE: ${objective}
@@ -395,7 +395,7 @@ Return ONLY this JSON:
     setStatus("Deriving criteria from your objective");
     try {
       const s = await askClaude(
-        `A person is building an opportunity map.
+        `A person is building a technology assessment map.
 
 TOPIC: ${topic}
 OBJECTIVE: ${objective}
@@ -611,7 +611,7 @@ Return ONLY this JSON:
   async function exportXlsx() {
     const ExcelJS = await loadExcelJS();
     const wb = new ExcelJS.Workbook();
-    wb.creator = "Opportunity Map Builder";
+    wb.creator = "Technology Assessment Map";
 
     const cols = structure.columns;
     const hair = { style: "thin", color: { argb: X.rule } };
@@ -729,7 +729,7 @@ Return ONLY this JSON:
       return row;
     };
 
-    const title = meta.addRow(["Opportunity Map"]);
+    const title = meta.addRow(["Technology Assessment Map"]);
     title.getCell(1).font = { bold: true, size: 16, color: { argb: X.pine } };
     title.height = 26;
     meta.addRow([]);
@@ -776,7 +776,7 @@ Return ONLY this JSON:
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `opportunity-map-${Date.now()}.xlsx`;
+    a.download = `technology-assessment-${Date.now()}.xlsx`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -814,7 +814,7 @@ Return ONLY this JSON:
               letterSpacing: "-0.015em",
             }}
           >
-            Opportunity Map Builder
+            Technology Assessment Map
           </div>
           <div
             style={{
@@ -825,7 +825,8 @@ Return ONLY this JSON:
               color: C.muted,
             }}
           >
-            Tell it what you're comparing. It'll take it from there.
+            Name a technology and a goal. Get every viable configuration, ranked against
+            what winning looks like.
           </div>
         </header>
         <Rule heavy />
@@ -842,7 +843,7 @@ Return ONLY this JSON:
                 htmlFor="topic-input"
                 style={{ display: "block", fontSize: 14, fontWeight: 600, marginBottom: 3 }}
               >
-                What opportunity space are you mapping?
+                What technology are you assessing?
               </label>
 
               <div
@@ -850,9 +851,9 @@ Return ONLY this JSON:
                 style={{ fontSize: 12.5, color: C.muted, marginBottom: 10, lineHeight: 1.55 }}
               >
                 <p style={{ margin: "0 0 9px" }}>
-                  Describe an area where multiple approaches, strategies, or methods could
-                  exist side by side. Think category of options, not a single plan or a
-                  vague problem.
+                  Describe a technology area where multiple designs, configurations, or
+                  deployment strategies could compete. Think a family of options, not a
+                  single product.
                 </p>
 
                 <div style={{ marginBottom: 9 }}>
@@ -865,8 +866,8 @@ Return ONLY this JSON:
                       lineHeight: 1.7,
                     }}
                   >
-                    Ways to… · Approaches for… · Strategies to… · Methods for… ·
-                    Opportunities in…
+                    Ways to… · Configurations for… · Strategies to deploy… · Pathways
+                    for…
                   </div>
                 </div>
 
@@ -874,9 +875,9 @@ Return ONLY this JSON:
                   <HelpLabel>Good examples</HelpLabel>
                   <ul style={{ margin: 0, paddingLeft: 16, lineHeight: 1.6 }}>
                     <li>Ways to store energy on an electrical grid</li>
-                    <li>Approaches for a coffee chain expanding into a new city</li>
                     <li>Strategies to deploy electrochemical carbon capture</li>
-                    <li>Methods for reducing hospital readmissions</li>
+                    <li>Pathways for producing green hydrogen</li>
+                    <li>Methods for recycling lithium-ion batteries</li>
                   </ul>
                 </div>
 
@@ -903,9 +904,9 @@ Return ONLY this JSON:
                     fontStyle: "italic",
                   }}
                 >
-                  Once you give a topic, the tool builds a structured comparison of the
-                  distinct approaches in that space, mapped against criteria derived from
-                  the objective.
+                  Once you name a technology, the tool lays out its distinct configurations
+                  and scores each against criteria derived from your goal, narrowing to the
+                  few worth deeper analysis.
                 </p>
               </div>
 
